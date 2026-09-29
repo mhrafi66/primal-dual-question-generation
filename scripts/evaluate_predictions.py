@@ -17,6 +17,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import torch
 import sacrebleu
 from rouge_score import rouge_scorer
 from transformers import pipeline
@@ -62,7 +63,7 @@ def main() -> None:
     }
 
     if not args.skip_qa:
-        qa = pipeline("question-answering", model=args.qa_model)
+        qa = pipeline("question-answering", model=args.qa_model, device=0 if torch.cuda.is_available() else -1)
         em_scores = []
         f1_scores = []
         for row in rows:

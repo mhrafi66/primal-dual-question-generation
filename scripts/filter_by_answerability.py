@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse, json, sys
 from pathlib import Path
+import torch
 from transformers import pipeline
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
@@ -19,7 +20,7 @@ def parse_args():
     return p.parse_args()
 
 def main():
-    a=parse_args(); qa=pipeline('question-answering',model=a.qa_model)
+    a=parse_args(); qa=pipeline('question-answering', model=a.qa_model, device=0 if torch.cuda.is_available() else -1)
     rows=[json.loads(x) for x in Path(a.predictions).read_text().splitlines() if x.strip()]
     good=[]; bad=[]
     for r in rows:

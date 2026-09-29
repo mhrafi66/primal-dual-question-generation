@@ -1,6 +1,7 @@
-torch>=2.0
-transformers>=4.30
-datasets>=2.14
-tqdm>=4.65
-numpy>=1.24
-sacrebleu>=2.3
+torch>=2.2
+transformers>=4.46,<4.47
+datasets>=2.21,<3
+numpy>=1.26,<2
+tqdm>=4.66,<5
+sacrebleu>=2.4,<3
+rouge-score>=0.1.2,<0.2
