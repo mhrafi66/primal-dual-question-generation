@@ -1,0 +1,15 @@
+{
+  "run_name": "qg_uw",
+  "device": "cuda:0",
+  "model": "facebook/bart-base",
+  "batch_size": 4,
+  "epochs": 1,
+  "learning_rate": 3e-05,
+  "alpha": 0.0,
+  "beta": 0.15,
+  "max_train_samples": 5000,
+  "max_eval_samples": 500,
+  "checkpoint": "/uufs/chpc.utah.edu/common/home/u1472438/primal-dual-question-generation/checkpoints/qg_uw.pth",
+  "seed": 66,
+  "distillation_temperature": 2.0
+}

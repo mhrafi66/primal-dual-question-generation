@@ -1,0 +1,10 @@
+{
+  "answer_consistency_em": 0.08,
+  "answer_consistency_f1": 0.14161948051948053,
+  "bleu": 4.292487903963811,
+  "lexical_novelty": 0.07223455196334452,
+  "num_examples": 500,
+  "rougeL_f1": 0.22189180225398628,
+  "run": "full_hotpot",
+  "mean_uncommon_word_rate": 0.17860634214688284
+}

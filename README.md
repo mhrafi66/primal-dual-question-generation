@@ -87,6 +87,22 @@ It also fixes:
 
 See [`docs/IMPLEMENTATION_NOTES.md`](docs/IMPLEMENTATION_NOTES.md) for details.
 
+<!-- AUTO_RESULTS_START -->
+## Restored experimental results
+
+The corrected repository now includes a clean BART baseline plus four controlled loss ablations. Full tables and interpretation notes are in [`docs/RESULTS.md`](docs/RESULTS.md).
+
+| Model | BLEU | QA F1 | Novelty |
+| --- | ---: | ---: | ---: |
+| BART answer-aware baseline | 17.6334 | 0.8239 | 0.2895 |
+| Restored QG only | 13.4708 | 0.5893 | 0.2109 |
+| Restored QG + QA | 12.0497 | 0.5181 | 0.1963 |
+| Restored QG + KD | 12.9952 | 0.5824 | 0.2221 |
+| Restored QG + QA + KD | 12.1577 | 0.4710 | 0.2028 |
+
+> These numbers are from the restored portfolio pipeline and are not presented as an exact reproduction of the EMNLP paper.
+<!-- AUTO_RESULTS_END -->
+
 ## Historical result
 
 The original report recorded a BLEU score of **1.275913**, compared with **19.07** reported for the referenced method. That number is retained only as a **historical class-submission result**. Because the submitted evaluation code did not restore the trained checkpoint and the QA branch used the gold question, I do not present that number as a valid evaluation of the corrected implementation.
