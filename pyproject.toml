@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "primal-dual-question-generation"
+version = "0.1.0"
+description = "Evaluation and demo utilities for an answer-aware primal-dual question-generation research prototype."
+requires-python = ">=3.10"
+dependencies = [
+  "torch",
+  "transformers",
+  "datasets",
+  "numpy",
+  "tqdm",
+  "sacrebleu",
+  "rouge-score",
+]
+
+[project.optional-dependencies]
+demo = ["gradio"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

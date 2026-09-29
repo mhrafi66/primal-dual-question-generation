@@ -6,6 +6,7 @@ from transformers import AutoTokenizer
 import random
 import math
 import os
+import json
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
@@ -15,11 +16,34 @@ from transformers import BartTokenizer, BartForConditionalGeneration
 from transformers import get_linear_schedule_with_warmup
 torch.manual_seed(66)
 
+def _env_int(name, default):
+  return int(os.environ.get(name, default))
+
+def _env_float(name, default):
+  return float(os.environ.get(name, default))
+
+def _env_bool(name, default=False):
+  value = os.environ.get(name)
+  if value is None:
+    return default
+  return value.lower() in {"1", "true", "yes", "on"}
+
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(device)
 
+# Lightweight experiment controls. Defaults preserve the restored class-submission
+# behavior; environment variables make smoke tests and ablations reproducible.
+PDQG_MAX_TRAIN_SAMPLES = _env_int("PDQG_MAX_TRAIN_SAMPLES", 0)
+PDQG_MAX_EVAL_SAMPLES = _env_int("PDQG_MAX_EVAL_SAMPLES", 0)
+PDQG_RUN_NAME = os.environ.get("PDQG_RUN_NAME", "full")
+
 train_dataset = load_dataset("squad", split="train")
 test_dataset = load_dataset("squad", split="validation")
+
+if PDQG_MAX_TRAIN_SAMPLES > 0:
+  train_dataset = train_dataset.select(range(min(PDQG_MAX_TRAIN_SAMPLES, len(train_dataset))))
+if PDQG_MAX_EVAL_SAMPLES > 0:
+  test_dataset = test_dataset.select(range(min(PDQG_MAX_EVAL_SAMPLES, len(test_dataset))))
 
 model_name = 'facebook/bart-base'
 
@@ -376,12 +400,16 @@ model_name = 'facebook/bart-base'
 dimension_of_model = AutoModel.from_pretrained(model_name).shared.weight.shape[1]
 print(dimension_of_model)
 
-batch_size = 32
-num_epochs = 9
-lr = 3e-5
+batch_size = _env_int("PDQG_BATCH_SIZE", 32)
+num_epochs = _env_int("PDQG_EPOCHS", 9)
+lr = _env_float("PDQG_LR", 3e-5)
 
-alpha = 0.8
-beta = 0.15
+alpha = _env_float("PDQG_ALPHA", 0.8)
+beta = _env_float("PDQG_BETA", 0.15)
+shuffle_train = _env_bool("PDQG_SHUFFLE", False)
+checkpoint_path = os.environ.get(
+    "PDQG_CHECKPOINT", f"checkpoints/{PDQG_RUN_NAME}.pth"
+)
 
 # store_train_dataset = train_dataset
 # store_test_dataset = test_dataset
@@ -391,7 +419,7 @@ beta = 0.15
 # indices = list(range(10))
 # test_dataset = store_test_dataset.select(indices)
 
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, collate_fn= custom_collate)
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle_train, collate_fn= custom_collate)
 test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn= custom_collate)
 
 model = QuesitonGenerationWithKnowledgeDist(embedding_dim= dimension_of_model, vocab_size = tokenizer.vocab_size, pad_token_id=tokenizer.pad_token_id)
@@ -408,6 +436,26 @@ scheduler = get_linear_schedule_with_warmup(optimizer, learning_rate_warmup_step
 best_val_loss = float('inf')
 best_model = None
 os.makedirs('checkpoints', exist_ok=True)
+os.makedirs('artifacts/experiments', exist_ok=True)
+with open(f'artifacts/experiments/{PDQG_RUN_NAME}_config.json', 'w') as config_file:
+  json.dump({
+      "run_name": PDQG_RUN_NAME,
+      "device": str(device),
+      "model": model_name,
+      "batch_size": batch_size,
+      "epochs": num_epochs,
+      "learning_rate": lr,
+      "alpha": alpha,
+      "beta": beta,
+      "max_train_samples": PDQG_MAX_TRAIN_SAMPLES,
+      "max_eval_samples": PDQG_MAX_EVAL_SAMPLES,
+      "checkpoint": checkpoint_path,
+  }, config_file, indent=2)
+print("experiment config:", {
+    "run": PDQG_RUN_NAME, "alpha": alpha, "beta": beta,
+    "epochs": num_epochs, "batch_size": batch_size,
+    "max_train": PDQG_MAX_TRAIN_SAMPLES, "max_eval": PDQG_MAX_EVAL_SAMPLES
+})
 
 for epoch in range(num_epochs):
   print(f"Epoch {epoch + 1}/{num_epochs}")
@@ -472,5 +520,5 @@ for epoch in range(num_epochs):
         "bst_dev_loss": best_val_loss,
         "epoch": epoch,
         "learning_rate": lr},
-               "checkpoints/QwithKD1.pth")
+               checkpoint_path)
 

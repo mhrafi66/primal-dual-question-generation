@@ -1,0 +1,6 @@
+[
+  {"name": "qg_only", "alpha": 0.0, "beta": 0.0},
+  {"name": "qg_qa", "alpha": 0.8, "beta": 0.0},
+  {"name": "qg_uw", "alpha": 0.0, "beta": 0.15},
+  {"name": "full", "alpha": 0.8, "beta": 0.15}
+]

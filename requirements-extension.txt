@@ -1,0 +1,4 @@
+sacrebleu
+rouge-score
+gradio
+pytest

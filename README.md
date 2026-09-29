@@ -191,3 +191,47 @@ ACL Anthology: https://aclanthology.org/2022.emnlp-main.4/
 ## Scope
 
 This is an educational research implementation, not an official reproduction of the EMNLP paper. The architecture adapts pretrained BART components and differs from the paper in several implementation details. The repository is preserved to show the modeling ideas, debugging process, and lessons learned from implementing a multi-objective NLP system.
+
+
+## Research extensions
+
+The restored repository includes a reproducible extension toolkit rather than only the historical class scripts:
+
+- answer-aware BART baseline training,
+- dataset-scale prediction generation,
+- BLEU and ROUGE-L evaluation,
+- independent-QA answer-consistency EM/F1,
+- lexical-novelty and uncommon-word analysis,
+- four-way QA/UW loss ablations,
+- QA-based candidate filtering,
+- HotpotQA cross-domain preparation,
+- manual error-analysis worksheets,
+- a Gradio demo,
+- unit tests and GitHub Actions CI, and
+- optional Slurm launch scripts for GPU experiments.
+
+See [`docs/EXPERIMENT_PLAN.md`](docs/EXPERIMENT_PLAN.md) for the recommended order. New numerical results should be reported only after the corresponding checkpoint, prediction JSONL, configuration, and Git commit are recorded.
+
+### Quick engineering checks
+
+```bash
+python -m pip install -e ".[dev,demo]"
+make test
+make ablation-dry-run
+```
+
+### Small baseline smoke test
+
+```bash
+make baseline-smoke
+```
+
+### Primal-dual ablation smoke test
+
+```bash
+python scripts/run_ablation_matrix.py \
+  --epochs 1 \
+  --batch-size 4 \
+  --max-train-samples 500 \
+  --max-eval-samples 100
+```
