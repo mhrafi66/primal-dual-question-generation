@@ -5,7 +5,6 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 import random
 import math
-import os
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
@@ -26,28 +25,6 @@ model_name = 'facebook/bart-base'
 #Data Tokenize and Preprocessing
 tokenizer = AutoTokenizer.from_pretrained(model_name, model_max_length = 512)
 
-def find_answer_token_span(offset_mapping, answer_start_char, answer_end_char):
-  """Map a character-level SQuAD answer span to token indices.
-
-  Returns (-100, -100) if truncation removed the answer. CrossEntropyLoss
-  uses -100 as an ignored label.
-  """
-  token_start = None
-  token_end = None
-
-  for idx, (start, end) in enumerate(offset_mapping):
-    if start == end:  # special tokens such as <s> and </s>
-      continue
-    if token_start is None and start <= answer_start_char < end:
-      token_start = idx
-    if start < answer_end_char <= end:
-      token_end = idx
-      break
-
-  if token_start is None or token_end is None:
-    return -100, -100
-  return token_start, token_end
-
 def tokenize_single_sample(dict_row):
   context = dict_row['context'].strip()
   context_tokens = tokenizer.tokenize(context, truncation=True, max_length=512)
@@ -59,8 +36,11 @@ def tokenize_single_sample(dict_row):
 
   answer_text = dict_row['answers']['text'][0].strip()
   answer_tokens = tokenizer.tokenize(answer_text, truncation=True, max_length=512)
-  answer_start_char = dict_row['answers']['answer_start'][0]
-  answer_end_char = answer_start_char + len(answer_text)
+  answer_start = dict_row['answers']['answer_start'][0]
+  answer_end = answer_start + len(answer_text) - 1
+  # answer token start and end position at the context token array
+  answer_token_start = len(tokenizer(context[:answer_start], truncation=True, max_length=512)['input_ids']) - 1
+  answer_token_end = len(tokenizer(context[:answer_end], truncation=True, max_length=512)['input_ids']) - 1
 
 
   # Section-1: Question Generation (Input: will be Context and Answer text, Output: Question)
@@ -77,28 +57,19 @@ def tokenize_single_sample(dict_row):
     desired_length_b = len(tokenized_input_qg) - desired_length_a
     segment_embedding_input_qg = torch.tensor([0] * desired_length_a  + [1] * desired_length_b)
 
-  # Section-2: Question Answering (corrected primal-dual path)
-  # The original submission concatenated context + *ground-truth question* here.
-  # That leaked the reference question into the dual QA task and disconnected QA
-  # loss from the generated-question representation. The corrected model embeds
-  # only the passage here; generated question embeddings are appended in forward().
-  qa_question_budget = max(1, len(question_input_ids) - 1)
-  qa_context_max_length = max(8, 512 - qa_question_budget)
-  qa_context_encoding = tokenizer(
-      context,
-      truncation=True,
-      max_length=qa_context_max_length,
-      return_offsets_mapping=True
-  )
-  tokenized_input_qa = qa_context_encoding['input_ids']
-  answer_token_start, answer_token_end = find_answer_token_span(
-      qa_context_encoding['offset_mapping'],
-      answer_start_char,
-      answer_end_char
-  )
-  tokenized_input_position_qa = torch.tensor(list(range(len(tokenized_input_qa))))
-  task_embedding_input_qa = torch.tensor([1] * len(tokenized_input_qa))
-  segment_embedding_input_qa = torch.tensor([0] * len(tokenized_input_qa))
+  # Section-2: Answering Questions (Input: Context and Question, Output: Answer )
+  tokenized_input_qa = tokenizer(context + '</s><s>' +question, truncation=True, max_length=512)['input_ids']
+  # task=0 for Question Generation, 1 for Question Answering and 2 for Uncommon Word generation
+  task = 1
+  tokenized_input_position_qa = torch.tensor(list(range(len(context_tokens)+2)) + list(range(len(question_tokens)+2)))
+  task_embedding_input_qa = torch.tensor([task] * len(tokenized_input_qa))
+  # Segment ID = 0 for context, 1 for answer and 2 for question. and +2 is for token <s> and </s> for each segment
+  segment_embedding_input_qa = torch.tensor([0] * (len(context_tokens)+2) + [2] * (len(question_tokens)+2))
+  #The following code I am writing for just patching in error handling
+  if segment_embedding_input_qa.size(0) > 512:
+    desired_length_a = int(0.90 * len(tokenized_input_qa))
+    desired_length_b = len(tokenized_input_qa) - desired_length_a
+    segment_embedding_input_qa = torch.tensor([0] * desired_length_a  + [1] * desired_length_b)
 
   # Section-3: Uncommon Word Generation (Input: Context, Output: Word Distribution)
   tokenized_input_uw = tokenizer(context, truncation=True, max_length=512)['input_ids']
@@ -228,66 +199,31 @@ class QuesitonGenerationWithKnowledgeDist(nn.Module):
 
 
 
-    # Question Answering Task -- corrected primal-dual coupling
-    # Passage embeddings come from the QA input. The question representation is
-    # the decoder hidden state produced by the QG branch above, NOT an embedding
-    # of the ground-truth question. This makes QA loss train the shared QG path.
-    qa_context_embedded = self.embedding_layer(
-        tokenized_input_qa, tokenized_input_position_qa,
-        task_embedding_input_qa, segment_embedding_input_qa
-    )
-    qa_context_attention_mask = tokenized_input_qa != self.pad_token_id
-
-    generated_question_task = torch.ones_like(trimmed_question_input_ids)
-    generated_question_segment = torch.full_like(trimmed_question_input_ids, 2)
-    generated_question_qa = qg_decoded_last_hidden_state + (
-        self.embedding_layer.task_embedding(generated_question_task)
-        + self.embedding_layer.segment_embedding(generated_question_segment)
-    ) / math.sqrt(self.embedding_dim)
-
-    qa_embedded = torch.cat((qa_context_embedded, generated_question_qa), dim=1)
-    qa_attention_mask = torch.cat(
-        (qa_context_attention_mask, qg_question_id_attention_mask), dim=1
-    )
-
-    qa_encoded_last_hidden_state = self.primal_dual_encoder(
-        inputs_embeds=qa_embedded, attention_mask=qa_attention_mask
-    ).last_hidden_state
-
-    # The answer must come from the passage, never from the appended question.
-    context_answer_mask = qa_context_attention_mask.clone()
-    context_answer_mask &= tokenized_input_qa != tokenizer.bos_token_id
-    context_answer_mask &= tokenized_input_qa != tokenizer.eos_token_id
-    answer_candidate_mask = torch.cat(
-        (context_answer_mask, torch.zeros_like(qg_question_id_attention_mask)),
-        dim=1
-    )
-
+    #Question Answering Task
+    qa_embedded = self.embedding_layer(tokenized_input_qa, tokenized_input_position_qa, task_embedding_input_qa, segment_embedding_input_qa)
+    qa_attention_mask = tokenized_input_qa != self.pad_token_id
+    # qa_attention_mask[tokenized_input_qa == self.pad_token_id] = 0
+    qa_encoded_last_hidden_state = self.primal_dual_encoder(inputs_embeds=qa_embedded, attention_mask=qa_attention_mask).last_hidden_state
+    # print(qa_encoded_last_hidden_state.shape)
     start_index_logits = self.start_index_ff_qa(qa_encoded_last_hidden_state).squeeze(-1)
-    start_index_logits = start_index_logits.masked_fill(~answer_candidate_mask, float('-inf'))
-    start_index_sm = self.softmax(start_index_logits)
+    # qa_attention_mask = qa_attention_mask.bool()
+    # start_index_logits[~qa_attention_mask] = float('-inf')
+    start_index_logits_masked = start_index_logits.masked_fill(~qa_attention_mask, float('-inf'))
+    start_index_sm = self.softmax(start_index_logits_masked)
     final_start_idx = torch.argmax(start_index_sm, dim=-1, keepdim=True)
 
-    positions = torch.arange(qa_attention_mask.size(1), device=qa_attention_mask.device)
-    # End may equal start for one-token answers; only positions before start are invalid.
-    ignore_for_end_index_mask = positions < final_start_idx
-    ignore_for_end_index_mask = ignore_for_end_index_mask | ~answer_candidate_mask
-
-    repeated_start_state = torch.gather(
-        qa_encoded_last_hidden_state,
-        1,
-        final_start_idx.unsqueeze(2).expand(
-            -1, qa_encoded_last_hidden_state.size(1), qa_encoded_last_hidden_state.size(2)
-        )
-    )
-    qa_end_features = torch.cat(
-        (qa_encoded_last_hidden_state, repeated_start_state), dim=-1
-    )
-    end_index_logits = self.end_index_ff_qa(qa_end_features).squeeze(-1)
-    end_index_logits = end_index_logits.masked_fill(
-        ignore_for_end_index_mask, float('-inf')
-    )
-    end_index_sm = self.softmax(end_index_logits)
+    # print(final_start_idx.shape)
+    # ignore_for_end_index_mask = (torch.arange(qa_attention_mask.size(1)) <= final_start_idx)  | ~qa_attention_mask
+    temp_tensor = torch.arange(qa_attention_mask.size(1))
+    temp_tensor = temp_tensor.to(device)
+    ignore_for_end_index_mask = temp_tensor <= final_start_idx
+    ignore_for_end_index_mask = ignore_for_end_index_mask | ~qa_attention_mask
+    repeated_tensor_of_final_start_index = torch.gather(qa_encoded_last_hidden_state, 1, final_start_idx.unsqueeze(2).expand(-1, qa_encoded_last_hidden_state.size(1), qa_encoded_last_hidden_state.size(2)))
+    qa_encoded_last_hidden_state = torch.cat((qa_encoded_last_hidden_state, repeated_tensor_of_final_start_index), dim=-1)
+    end_index_logits = self.end_index_ff_qa(qa_encoded_last_hidden_state).squeeze(-1)
+    # end_index_logits[ignore_for_end_index_mask] = float('-inf')
+    end_index_logits_masked = end_index_logits.masked_fill(ignore_for_end_index_mask, float('-inf'))
+    end_index_sm = self.softmax(end_index_logits_masked)
 
 
 
@@ -398,8 +334,7 @@ model = QuesitonGenerationWithKnowledgeDist(embedding_dim= dimension_of_model, v
 model = model.to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-qg_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-qa_criterion = nn.CrossEntropyLoss(ignore_index=-100)
+criterion = nn.CrossEntropyLoss()
 
 total_training_steps = len(train_dataloader) * num_epochs
 learning_rate_warmup_steps = 50
@@ -407,7 +342,6 @@ scheduler = get_linear_schedule_with_warmup(optimizer, learning_rate_warmup_step
 
 best_val_loss = float('inf')
 best_model = None
-os.makedirs('checkpoints', exist_ok=True)
 
 for epoch in range(num_epochs):
   print(f"Epoch {epoch + 1}/{num_epochs}")
@@ -421,7 +355,7 @@ for epoch in range(num_epochs):
     #Trimming the input ID shape by one to match the shape of input
     #During input, its tail was dropped to save it from producing <\s> by bias
     target_qs = batch['question_input_ids'][:, 1:].to(device)
-    qg_loss = qg_criterion(gen_qs.view(-1, gen_qs.shape[-1]), target_qs.view(-1))
+    qg_loss = criterion(gen_qs.view(-1, gen_qs.shape[-1]), target_qs.view(-1))
 
     answer_start_pos = batch['answer_token_start'].to(device)
     answer_end_pos = batch['answer_token_end'].to(device)
@@ -430,7 +364,7 @@ for epoch in range(num_epochs):
     # print("Start Positions = ",answer_start_pos)
     # print("End Logits = ",end_logits)
     # print("End Positions = ",answer_end_pos)
-    qa_loss = qa_criterion(start_logits, answer_start_pos) + qa_criterion(end_logits, answer_end_pos)
+    qa_loss = criterion(start_logits, answer_start_pos) + criterion(end_logits, answer_end_pos)
     # print(criterion(start_logits, answer_start_pos).item(), criterion(end_logits, answer_end_pos).item())
     uw_loss = -torch.sum(y_en * torch.log(y_pre))
     # print(qg_loss.item(), qa_loss.item(), uw_loss.item())
@@ -450,11 +384,11 @@ for epoch in range(num_epochs):
                                                                                 batch['tokenized_input_qa'].to(device), batch['tokenized_input_position_qa'].to(device), batch['task_embedding_input_qa'].to(device), batch['segment_embedding_input_qa'].to(device),
                                                                                 batch['tokenized_input_uw'].to(device), batch['tokenized_input_position_uw'].to(device), batch['task_embedding_input_uw'].to(device), batch['segment_embedding_input_uw'].to(device))
       target_qs = batch['question_input_ids'][:, 1:].to(device)
-      qg_loss = qg_criterion(gen_qs.view(-1, gen_qs.shape[-1]), target_qs.view(-1))
+      qg_loss = criterion(gen_qs.view(-1, gen_qs.shape[-1]), target_qs.view(-1))
 
       answer_start_pos = batch['answer_token_start'].to(device)
       answer_end_pos = batch['answer_token_end'].to(device)
-      qa_loss = qa_criterion(start_logits, answer_start_pos) + qa_criterion(end_logits, answer_end_pos)
+      qa_loss = criterion(start_logits, answer_start_pos) + criterion(end_logits, answer_end_pos)
 
       uw_loss = -torch.sum(y_en * torch.log(y_pre))
 
@@ -472,5 +406,5 @@ for epoch in range(num_epochs):
         "bst_dev_loss": best_val_loss,
         "epoch": epoch,
         "learning_rate": lr},
-               "checkpoints/QwithKD1.pth")
+               f"/uufs/chpc.utah.edu/common/home/u1472438/NLP_Project/QwithKD1.pth")
 
