@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "primal-dual-question-generation"
-version = "0.1.0"
-description = "Evaluation and demo utilities for an answer-aware primal-dual question-generation research prototype."
+version = "0.2.0"
+description = "Restored primal-dual automatic question generation with QA consistency and uncommon-word distillation."
 requires-python = ">=3.10"
 dependencies = [
   "torch>=2.2",

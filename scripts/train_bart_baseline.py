@@ -92,6 +92,9 @@ def main() -> None:
     model.to(device)
     optimizer = AdamW(model.parameters(), lr=args.learning_rate)
 
+    best_eval_loss = float("inf")
+    history = []
+
     for epoch in range(args.epochs):
         model.train()
         progress = tqdm(train_loader, desc=f"train epoch {epoch + 1}")
@@ -113,10 +116,17 @@ def main() -> None:
                 eval_loss += model(**batch).loss.item()
         eval_loss /= max(len(eval_loader), 1)
         print(f"epoch={epoch + 1} validation_loss={eval_loss:.4f}")
+        history.append({"epoch": epoch + 1, "validation_loss": eval_loss})
+        if eval_loss < best_eval_loss:
+            best_eval_loss = eval_loss
+            model.save_pretrained(output_dir)
+            tokenizer.save_pretrained(output_dir)
+            print(f"saved new best baseline to {output_dir}")
 
-    model.save_pretrained(output_dir)
-    tokenizer.save_pretrained(output_dir)
-    print(f"saved baseline to {output_dir}")
+    import json
+    (output_dir / "training_history.json").write_text(json.dumps(history, indent=2) + "\n")
+    print(f"best_validation_loss={best_eval_loss:.4f}")
+    print(f"saved best baseline to {output_dir}")
 
 
 if __name__ == "__main__":

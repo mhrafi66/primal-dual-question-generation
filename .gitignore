@@ -10,8 +10,15 @@ env/
 outputs/
 checkpoints/
 artifacts/experiments/*.log
+artifacts/experiments/*.out
 artifacts/experiments/*_metrics.json
+artifacts/experiments/*_uncommon.json
 artifacts/experiments/*_predictions.jsonl
+artifacts/experiments/*_accepted.jsonl
+artifacts/experiments/*_rejected.jsonl
+artifacts/experiments/*_scored.jsonl
+artifacts/hotpotqa*.jsonl
+artifacts/*error_analysis.csv
 wandb/
 *.egg-info/
 dist/
